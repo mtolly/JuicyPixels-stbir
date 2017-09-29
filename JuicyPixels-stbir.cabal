@@ -15,12 +15,12 @@ cabal-version:        >= 1.10
 synopsis:             Scale JuicyPixels images with stb_image_resize
 description:
   Use the <https://github.com/nothings/stb stb> image resize C library
-  to scale JuicyPixels images at high quality.
+  to scale JuicyPixels images at high quality with a variety of options.
 
 library
   hs-source-dirs:       src
   exposed-modules:      Codec.Picture.STBIR
-  build-depends:        base >= 4.7 && < 5, JuicyPixels, vector
+  build-depends:        base >= 4.7 && < 5, JuicyPixels, vector, data-default-class
   build-tools:          c2hs
   default-language:     Haskell2010
   ghc-options:          -Wall
