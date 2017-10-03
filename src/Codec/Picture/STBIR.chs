@@ -191,7 +191,7 @@ resize
 resize opts w' h' img@(Image w h v) = unsafePerformIO $ do
   V.unsafeWith v $ \p -> do
     let comps = pixelProperty componentCount img
-    fp <- mallocForeignPtrBytes $ w' * h' * comps
+    fp <- mallocForeignPtrArray $ w' * h' * comps
     let (cfun, f0, f1, f2, f3) = case transform opts of
           Left  (Scale  a b c d) -> (stbir_resize_subpixel, a, b, c, d)
           Right (Region a b c d) -> (stbir_resize_region  , a, b, c, d)
