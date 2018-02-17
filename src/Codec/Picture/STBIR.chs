@@ -7,7 +7,9 @@ module Codec.Picture.STBIR
   -- * Options
 , Options(..)
 , defaultOptions
-, Flag(..)
+, Flag
+, flag_ALPHA_PREMULTIPLIED
+, flag_ALPHA_USES_COLORSPACE
 , Edge(..)
 , Filter(..)
 , Colorspace(..)
@@ -29,21 +31,50 @@ import Data.Default.Class (Default(..))
 
 #include "stb_image_resize.h"
 
-{#enum define Flag
-  { STBIR_FLAG_ALPHA_PREMULTIPLIED as FLAG_ALPHA_PREMULTIPLIED
-  , STBIR_FLAG_ALPHA_USES_COLORSPACE as FLAG_ALPHA_USES_COLORSPACE
-  } deriving (Eq, Ord, Show, Read, Bounded)
-#}
+newtype Flag = Flag { fromFlag :: CInt }
+  deriving (Eq, Ord, Show, Read)
+
+{- |
+Set this flag if your texture has premultiplied alpha. Otherwise, `stbir` will
+use alpha-weighted resampling (effectively premultiplying, resampling,
+then unpremultiplying).
+-}
+flag_ALPHA_PREMULTIPLIED :: Flag
+flag_ALPHA_PREMULTIPLIED = Flag 1 -- c2hs const has problems due to <<
+
+{- |
+The specified alpha channel should be handled as gamma-corrected value even
+when doing sRGB operations.
+-}
+flag_ALPHA_USES_COLORSPACE :: Flag
+flag_ALPHA_USES_COLORSPACE = Flag 2
 
 {#enum stbir_edge as Edge {}
   with prefix = "STBIR_"
   deriving (Eq, Ord, Show, Read, Bounded)
 #}
 
-{#enum stbir_filter as Filter {}
-  with prefix = "STBIR_"
+data Filter
+  = FILTER_DEFAULT      -- ^ use same filter type that easy-to-use API chooses
+  | FILTER_BOX          -- ^ A trapezoid w/1-pixel wide ramps, same result as box for integer scale ratios
+  | FILTER_TRIANGLE     -- ^ On upsampling, produces same results as bilinear texture filtering
+  | FILTER_CUBICBSPLINE -- ^ The cubic b-spline (aka Mitchell-Netrevalli with B=1,C=0), gaussian-esque
+  | FILTER_CATMULLROM   -- ^ An interpolating cubic spline
+  | FILTER_MITCHELL     -- ^ Mitchell-Netrevalli filter with B=1\/3, C=1\/3
+  deriving (Eq, Ord, Show, Read, Enum, Bounded)
+
+-- the separate types here are because c2hs doesn't let me insert haddocks
+{#enum stbir_filter as C_Filter {}
   deriving (Eq, Ord, Show, Read, Bounded)
 #}
+
+cFilter :: Filter -> CInt
+cFilter FILTER_DEFAULT      = fromIntegral $ fromEnum STBIR_FILTER_DEFAULT
+cFilter FILTER_BOX          = fromIntegral $ fromEnum STBIR_FILTER_BOX
+cFilter FILTER_TRIANGLE     = fromIntegral $ fromEnum STBIR_FILTER_TRIANGLE
+cFilter FILTER_CUBICBSPLINE = fromIntegral $ fromEnum STBIR_FILTER_CUBICBSPLINE
+cFilter FILTER_CATMULLROM   = fromIntegral $ fromEnum STBIR_FILTER_CATMULLROM
+cFilter FILTER_MITCHELL     = fromIntegral $ fromEnum STBIR_FILTER_MITCHELL
 
 {#enum stbir_colorspace as Colorspace {}
   omit (STBIR_MAX_COLORSPACES)
@@ -56,6 +87,7 @@ import Data.Default.Class (Default(..))
   with prefix = "STBIR_"
 #}
 
+-- | Specify scale explicitly for subpixel correctness
 data Scale = Scale
   { x_scale :: Float
   , y_scale :: Float
@@ -63,7 +95,7 @@ data Scale = Scale
   , y_offset :: Float
   } deriving (Eq, Ord, Show, Read)
 
--- | Selects a subregion from the input image.
+-- | Specify image source tile using texture coordinates
 data Region = Region
   { region_s0 :: Float -- ^ x of top-left corner from 0 to 1
   , region_t0 :: Float -- ^ y of top-left corner from 0 to 1
@@ -81,6 +113,7 @@ data Options = Options
   , transform :: Either Scale Region
   } deriving (Eq, Ord, Show, Read)
 
+-- | These are the options that correspond to the \"Easy-to-use API\".
 defaultOptions :: Options
 defaultOptions = Options
   { flags = []
@@ -105,6 +138,7 @@ instance STBIRComponent Float  where stbirType _ = TYPE_FLOAT
 noAlpha :: CInt
 noAlpha = {#const STBIR_ALPHA_CHANNEL_NONE #}
 
+-- | All types currently covered by JP's 'Pixel' are supported.
 class (Pixel a, STBIRComponent (PixelBaseComponent a)) => STBIRPixel a where
   alphaIndex :: a -> Maybe Int
 instance STBIRPixel PixelRGBA16  where alphaIndex _ = Just 3
@@ -138,8 +172,8 @@ instance STBIRPixel Pixel8       where alphaIndex _ = Nothing
   , `CInt' -- ^ int flags
   , `Edge' -- ^ stbir_edge edge_mode_horizontal
   , `Edge' -- ^ stbir_edge edge_mode_vertical
-  , `Filter' -- ^ stbir_filter filter_horizontal
-  , `Filter' -- ^ stbir_filter filter_vertical
+  , cFilter `Filter' -- ^ stbir_filter filter_horizontal
+  , cFilter `Filter' -- ^ stbir_filter filter_vertical
   , `Colorspace' -- ^ stbir_colorspace space
   , id `Ptr ()' -- ^ void *alloc_context
   , `CFloat' -- ^ float x_scale
@@ -164,8 +198,8 @@ instance STBIRPixel Pixel8       where alphaIndex _ = Nothing
   , `CInt' -- ^ int flags
   , `Edge' -- ^ stbir_edge edge_mode_horizontal
   , `Edge' -- ^ stbir_edge edge_mode_vertical
-  , `Filter' -- ^ stbir_filter filter_horizontal
-  , `Filter' -- ^ stbir_filter filter_vertical
+  , cFilter `Filter' -- ^ stbir_filter filter_horizontal
+  , cFilter `Filter' -- ^ stbir_filter filter_vertical
   , `Colorspace' -- ^ stbir_colorspace space
   , id `Ptr ()' -- ^ void *alloc_context
   , `CFloat' -- ^ float s0
@@ -181,6 +215,9 @@ pixelProperty f img = let
   getFakePixel = undefined
   in f $ getFakePixel img
 
+-- | This function allows access to all \"API levels\" of the C library.
+-- Pass 'defaultOptions' to use the easy API, or override whichever options
+-- you need.
 resize
   :: (STBIRPixel a)
   => Options
@@ -207,7 +244,7 @@ resize opts w' h' img@(Image w h v) = unsafePerformIO $ do
       (pixelProperty (stbirType . pixelOpacity) img)
       (fromIntegral comps)
       (maybe noAlpha fromIntegral $ pixelProperty alphaIndex img)
-      (fromIntegral $ foldr (.|.) 0 $ map fromEnum $ flags opts)
+      (fromIntegral $ foldr (.|.) 0 $ map fromFlag $ flags opts)
       (edgeModeHorizontal opts)
       (edgeModeVertical opts)
       (filterHorizontal opts)
